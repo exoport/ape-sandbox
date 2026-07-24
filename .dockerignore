@@ -1,0 +1,5 @@
+# Keep the build context tiny — only the Dockerfile + entrypoint are needed.
+# Nothing private is ever fetched at build time (the framework is a runtime mount).
+*
+!Dockerfile
+!entrypoint.sh

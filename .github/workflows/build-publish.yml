@@ -1,0 +1,79 @@
+name: build-publish
+
+# Build the PUBLIC ape-sandbox image and push it to ghcr.io/exoport/ape-sandbox.
+#
+# There is no build secret: the image is framework-free by design (the private
+# APEX framework is mounted read-only at runtime by aped), so this workflow needs
+# nothing beyond GITHUB_TOKEN's packages:write to publish.
+#
+# Triggers:
+#   * push of a version tag (vX.Y.Z) — the image is tagged with it, and
+#     APE_VERSION defaults to the same tag.
+#   * pull request — build only (no push), so a Dockerfile change is verified
+#     before it can publish anything.
+#   * manual dispatch — override the image tag / ape version.
+#
+# NOTE: the package's visibility is set once, on the package page (or with `gh api`)
+# — the first push creates it private by default. Make it PUBLIC, or every consumer
+# is back to needing a pull credential, which is exactly what this image avoids.
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['Dockerfile', 'entrypoint.sh', '.github/workflows/build-publish.yml']
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag (default: git tag or "dev")'
+        required: false
+      ape_version:
+        description: 'ape release baked into the image'
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_REPO: ghcr.io/exoport/ape-sandbox
+  DEFAULT_APE_VERSION: v0.0.48
+
+jobs:
+  build-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve versions
+        id: v
+        run: |
+          tag="${{ inputs.image_tag }}"
+          if [ -z "$tag" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          [ -n "$tag" ] || tag="dev"
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+          ape="${{ inputs.ape_version }}"
+          if [ -z "$ape" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then ape="${GITHUB_REF_NAME}"; fi
+          [ -n "$ape" ] || ape="${DEFAULT_APE_VERSION}"
+          echo "ape_version=$ape" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push on a tag)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ env.IMAGE_REPO }}:${{ steps.v.outputs.image_tag }}
+          build-args: |
+            APE_VERSION=${{ steps.v.outputs.ape_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
