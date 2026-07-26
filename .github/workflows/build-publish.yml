@@ -7,8 +7,9 @@ name: build-publish
 # nothing beyond GITHUB_TOKEN's packages:write to publish.
 #
 # Triggers:
-#   * push of a version tag (vX.Y.Z) — the image is tagged with it, and
-#     APE_VERSION defaults to the same tag.
+#   * push of a version tag (vX.Y.Z) — the image is tagged with it. Nothing here
+#     references an ape release: aped delivers `ape` into workspaces at runtime
+#     (PLAN-23), so this build has no dependency on apex_process_ape at all.
 #   * pull request — build only (no push), so a Dockerfile change is verified
 #     before it can publish anything.
 #   * manual dispatch — override the image tag / ape version.
@@ -27,9 +28,6 @@ on:
       image_tag:
         description: 'Image tag (default: git tag or "dev")'
         required: false
-      ape_version:
-        description: 'ape release baked in (default: the ARG APE_VERSION in the Dockerfile)'
-        required: false
 
 permissions:
   contents: read
@@ -37,7 +35,6 @@ permissions:
 
 env:
   IMAGE_REPO: ghcr.io/exoport/ape-sandbox
-  DEFAULT_APE_VERSION: v0.0.49
 
 jobs:
   build-publish:
@@ -52,13 +49,6 @@ jobs:
           if [ -z "$tag" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
           [ -n "$tag" ] || tag="dev"
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
-          # The baked ape is a DEPENDENCY PIN, not this image's version: an image tag
-          # must never be reused as an ape release name. Default to the pin in the
-          # Dockerfile so a plain tag push bakes what the repo says it bakes.
-          ape="${{ inputs.ape_version }}"
-          [ -n "$ape" ] || ape="$(sed -n 's/^ARG APE_VERSION=//p' Dockerfile | head -1)"
-          [ -n "$ape" ] || ape="${DEFAULT_APE_VERSION}"
-          echo "ape_version=$ape" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -76,7 +66,5 @@ jobs:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ env.IMAGE_REPO }}:${{ steps.v.outputs.image_tag }}
-          build-args: |
-            APE_VERSION=${{ steps.v.outputs.ape_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

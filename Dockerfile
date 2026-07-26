@@ -13,25 +13,28 @@
 # already has (`ape sandbox framework materialize <ref>`) — and any node or laptop
 # can pull this image with no credential at all.
 #
-# What it does carry: claude, node, ape, git, sshd, chromium + Playwright, build
-# tools, and the LANGUAGE-AGNOSTIC toolchain managers (asdf + bingo). It bakes no
-# language runtime: a project declares its own versions in `.tool-versions` /
-# `.bingo/` and `ape sandbox setup` materializes them into durable cache mounts,
-# which keeps this one image from fanning out into a matrix of per-stack variants.
+# It carries NO ape either (PLAN-23): `aped` mounts the `ape` installed beside it
+# read-only at /opt/ape/bin, so a workspace runs the version matching the daemon that
+# provisioned it. That is why this image no longer references an ape release at all.
 #
-# VERSIONING — the image has its OWN version line, independent of ape:
+# What it does carry: claude, node, git, sshd, chromium + Playwright, build tools, and
+# the LANGUAGE-AGNOSTIC toolchain managers (asdf + bingo). It bakes no language runtime:
+# a project declares its own versions in `.tool-versions` / `.bingo/` and
+# `ape sandbox setup` materializes them into durable cache mounts, which keeps this one
+# image from fanning out into a matrix of per-stack variants.
+#
+# VERSIONING — the image has its OWN version line, and it is now genuinely independent:
 #   * This image changes for reasons ape does not: a new base, a newer asdf/bingo, a
 #     Playwright bump, an extra build dep. Tying its tag to ape's would mean either
 #     cutting a meaningless ape release to ship an image fix, or a tag that lies about
 #     what changed.
-#   * The two directions are ordinary dependency pins, one each way: APE_VERSION below
-#     pins which ape release is baked in, and `sandbox.DefaultImage`
+#   * ONE pin remains, and it points this way: `sandbox.DefaultImage`
 #     (apex_process_ape, internal/sandbox/kata.go) + the aped policy image allow-list
-#     pin which image ape provisions. Bump each deliberately.
-#   * The baked ape need NOT match the host's ape: the in-guest binary installs the
-#     framework and runs jobs, and the wire contracts it uses are additive-only. It does
-#     have a floor, though — `ape framework setup` needs the scoped `safe.directory` fix
-#     (v0.0.49) to read the read-only, host-owned framework mount.
+#     select which image ape provisions. Nothing here points back at ape.
+#   * The in-guest ape version floor is gone with the baked binary. It used to matter —
+#     `ape framework setup` needs the scoped `safe.directory` fix (v0.0.49) to read the
+#     read-only, host-owned framework mount — and a baked ape could be older than that.
+#     A delivered one is the node's own, so it cannot be.
 #
 # PINNING POLICY — read before publishing (see README.md):
 #   * NEVER track a floating `:latest` base in a published image. BASE_IMAGE is
@@ -58,7 +61,6 @@ ARG BASE_IMAGE=ghcr.io/agent-infra/sandbox:1.11.0@sha256:6328d7fd2f0ff0b4c147c3d
 FROM ${BASE_IMAGE}
 
 # Pinned versions — bump deliberately, rebuild, then re-tag the image.
-ARG APE_VERSION=v0.0.49
 ARG CLAUDE_CODE_VERSION=latest
 ARG PLAYWRIGHT_BROWSER=chromium
 ARG NODE_MAJOR=20
@@ -90,11 +92,19 @@ RUN if ! command -v node >/dev/null 2>&1; then \
 # Claude Code CLI.
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
-# ape — pinned release tarball from the PUBLIC releases (anonymous, no token).
-RUN set -euo pipefail; \
-    url="https://github.com/exoport/apex_process_ape/releases/download/${APE_VERSION}/ape_linux_${TARGETARCH}.tar.gz"; \
-    curl -fsSL "$url" | tar -xz -C /usr/local/bin ape; \
-    /usr/local/bin/ape version
+# ape is NOT baked (PLAN-23). aped mounts the `ape` installed beside it read-only at
+# /opt/ape/bin when it provisions a workspace, so the workspace runs the version matching
+# the daemon that created it. Baking one meant every workspace ran whatever release was
+# current when this image was built — structurally the PREVIOUS one, and since project work
+# happens inside workspaces, an ape upgrade never reached the place the work happens.
+#
+# It also removes this image's dependency on an ape release entirely: nothing here has to
+# wait for, or point at, a version of ape.
+#
+# Only the mountpoint is created. An empty dir means a workspace on a node too old to
+# deliver anything fails with "ape: command not found" rather than silently running a
+# stale baked copy — the mount is the only way an ape gets here.
+RUN mkdir -p /opt/ape/bin
 
 # Go toolchain — the bootstrap for bingo (and the common case for APEX projects).
 # A project that pins a DIFFERENT Go version gets it from asdf into its durable
@@ -123,6 +133,33 @@ RUN set -euo pipefail; \
 # fails with a clear "not materialized" error rather than a mystery path.
 RUN mkdir -p /opt/apex-framework
 ENV APEX_FRAMEWORK_REPO=/opt/apex-framework
+
+# /opt/ape/bin leads PATH so the delivered ape wins over anything else of that name. A
+# project's bingo-pinned ape is unaffected: bingo installs VERSION-STAMPED names and its
+# generated Variables.mk calls them by absolute path, so a pin never resolves through PATH.
+# (Do not `bingo get -l ape` in a workspace — the unstamped link lands in $GOBIN, which is
+# a node-wide shared cache, so two projects pinning different versions would contend for
+# one name. The stamped names are what make that cache safe to share.)
+ENV PATH="/opt/ape/bin:${PATH}"
+
+# Container ENV above reaches `ape sandbox exec` and `attach`, which inherit the container
+# process environment — and does NOT reach an ssh / VS Code Remote session, because sshd
+# builds a fresh environment per session instead of passing its own along. So a login shell
+# gets the same values from a profile drop-in (PLAN-23 D9): PATH here, and the rest from the
+# per-workspace file aped writes into the composed home. Without the second half, `go` and
+# `asdf` in an ssh session use the ephemeral rootfs instead of the durable /cache mounts.
+RUN printf '%s\n' \
+  '# ape-sandbox: login-shell environment (ssh / VS Code Remote).' \
+  '# sshd does not pass the container environment into a session, so re-establish it here.' \
+  'case ":$PATH:" in' \
+  '  *:/opt/ape/bin:*) ;;' \
+  '  *) PATH="/opt/ape/bin:$PATH"; export PATH ;;' \
+  'esac' \
+  '# Per-workspace values aped derives from the mounts it actually applied (tool caches,' \
+  '# egress proxy). Absent when the workspace declared no toolchain — not an error.' \
+  'if [ -r "$HOME/.ape-env" ]; then . "$HOME/.ape-env"; fi' \
+  > /etc/profile.d/ape-sandbox.sh \
+  && chmod 0644 /etc/profile.d/ape-sandbox.sh
 
 # Chromium + Playwright (Excalidraw rendering / browser workloads run inside
 # the VM, where a real guest kernel avoids gVisor's syscall-compat gaps).
@@ -155,6 +192,8 @@ RUN mkdir -p /run/sshd \
 #   /sandbox/home       the composed ~/.claude (guest $HOME)
 #   /workspace          the ROOT for project repos, each at /workspace/<name>
 #   /cache              durable tool caches (asdf/go/cargo/...), one per subdir
+#   /opt/ape/bin        the `ape` binary, read-only, from the node's own install
+#   /opt/apex-framework the pinned framework checkout, read-only
 RUN mkdir -p /sandbox/home /workspace /cache && chown ape:ape /sandbox/home
 
 COPY entrypoint.sh /usr/local/bin/ape-sandbox-entrypoint

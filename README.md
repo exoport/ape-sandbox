@@ -10,6 +10,13 @@ just central nodes, a private image would mean a registry credential per
 **read-only at runtime** from a checkout the node already has. Any node or laptop
 pulls it anonymously.
 
+**`ape` is delivered at runtime too, not baked.** `aped` mounts the `ape` installed
+beside it read-only at `/opt/ape/bin` (first on `PATH`), so a workspace runs the version
+matching the daemon that provisioned it. A baked `ape` was always the release that was
+current when the image was built — structurally the previous one — and since project work
+happens *inside* workspaces, an `ape` upgrade never reached the place the work happens.
+It also means this image has **no dependency on an `ape` release at all**.
+
 ```bash
 ape sandbox up dev            # aped pulls ghcr.io/exoport/ape-sandbox:<tag>
 ```
@@ -19,7 +26,7 @@ ape sandbox up dev            # aped pulls ghcr.io/exoport/ape-sandbox:<tag>
 | Layer | Contents |
 | --- | --- |
 | Base | [`agent-infra/sandbox`](https://github.com/agent-infra/sandbox) (Apache-2.0) — headless browser (VNC + CDP), VS Code Server, terminal, MCP servers |
-| Agent | `claude` (Claude Code CLI), `ape` (pinned public release) |
+| Agent | `claude` (Claude Code CLI). **`ape` is not baked** — `aped` mounts it at runtime, see below |
 | Dev | `git`, `build-essential`, `sshd`, chromium + Playwright |
 | Toolchain managers | `asdf` (language/runtime versions) + `bingo` (repo-pinned Go tools), plus a bootstrap Go |
 
@@ -53,6 +60,7 @@ profile's `image:` override.
 | `/workspace/<name>` | one directory per project repo; the main repo is the working directory |
 | `/opt/apex-framework` | the pinned APEX framework, **read-only** (`$APEX_FRAMEWORK_REPO` points here) |
 | `/cache/<tool>` | durable tool caches (`asdf`, `go`, `cargo`, …) so a rebuild is offline |
+| `/opt/ape/bin` | the `ape` binary, read-only, from the node's own install — first on `PATH` |
 
 Inside a workspace, install the framework's skills + pipelines from the mount
 without touching the network:
@@ -66,9 +74,14 @@ ape framework setup --no-fetch
 ```bash
 make build                                  # local build
 make build NERDCTL="sudo nerdctl" NAMESPACE=aped   # straight into a local aped
-make smoke                                  # verify ape/claude/asdf/bingo are present
+make smoke                                  # verify claude/asdf/bingo + the mountpoints
+make smoke-delivery APE=$(command -v ape)   # verify a mounted ape resolves as `ape`
 make publish                                # build + push to ghcr.io/exoport
 ```
+
+`smoke-delivery` replaces the old `ape version` check: proving a layer existed said
+nothing useful once the binary stopped being baked, while mounting one in the way `aped`
+does exercises the mechanism every workspace actually depends on.
 
 CI publishes on a `vX.Y.Z` tag push and build-checks every PR that touches the
 Dockerfile. No build secret is needed.
@@ -90,9 +103,11 @@ Dockerfile. No build secret is needed.
 The published image is **`linux/amd64` only**: the workflow passes no `platforms:` to
 `build-push-action`, so it builds for the runner it lands on.
 
-The Dockerfile itself is already arch-parameterized — `ape`, Go and asdf are all
-fetched per `TARGETARCH` — so adding arm64 is a **workflow** change, not a Dockerfile
-one. Two ways, in increasing order of moving parts:
+The Dockerfile itself is already arch-parameterized — Go and asdf are fetched per
+`TARGETARCH` — so adding arm64 is a **workflow** change, not a Dockerfile one. (`ape` is
+not among them any more: it arrives from the node at runtime, which means the node's `ape`
+must match the guest's architecture — `aped` asserts that rather than discovering it as an
+exec format error inside the VM.) Two ways, in increasing order of moving parts:
 
 - `platforms: linux/amd64,linux/arm64` plus `docker/setup-qemu-action`. One line, but
   the arm64 half builds under emulation; the npm native modules and Playwright are
@@ -112,17 +127,16 @@ does not — a new base image, a newer asdf/bingo, a Playwright bump — and tyi
 together would mean either cutting a meaningless `ape` release to ship an image fix, or a
 tag that lies about what changed.
 
-Two ordinary dependency pins, one in each direction:
+**One** pin remains, and it points one way:
 
 | Pin | Where | Meaning |
 | --- | --- | --- |
-| `ARG APE_VERSION` | this repo's `Dockerfile` | which `ape` release is baked in |
-| `sandbox.DefaultImage` | `apex_process_ape`, `internal/sandbox/kata.go` (+ the `aped` policy image allow-list) | which image `ape` provisions |
+| `sandbox.DefaultImage` | `apex_process_ape`, `internal/sandbox/kata.go` (+ the `aped` policy image allow-list, which is matched by EXACT string and must move with it) | which image `ape` provisions |
 
-Bump each deliberately. The baked `ape` need **not** match the host's: the in-guest binary
-installs the framework and runs jobs, and the wire contracts it uses are additive-only.
-It does have a floor — `ape framework setup` needs the scoped `safe.directory` fix
-(**v0.0.49**) to read the read-only, host-owned framework mount.
+Nothing here points back at `ape`. The old second pin (`ARG APE_VERSION`) is gone with the
+baked binary, and so is the version floor it needed: `ape framework setup` requires the
+scoped `safe.directory` fix (v0.0.49) to read the read-only, host-owned framework mount,
+and a *delivered* `ape` is the node's own, so it cannot predate its own daemon.
 
 ## Pinning policy
 - The base image is **digest-pinned** in the `Dockerfile`. Never publish an image

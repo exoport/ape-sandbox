@@ -47,13 +47,26 @@ build: ## Build the image. Set NAMESPACE=aped for local aped use.
 smoke: ## Verify the built image carries the expected tooling
 	$(NERDCTL) $(NS_FLAG) run --rm $(IMAGE) sh -lc '\
 	  set -e; \
-	  ape version; \
 	  claude --version; \
 	  asdf --version; \
 	  bingo version; \
 	  git --version; \
 	  test -d /opt/apex-framework && echo "framework mountpoint present (empty by design)"; \
-	  test -d /workspace && test -d /cache && echo "workspace + cache mountpoints present"'
+	  test -d /opt/ape/bin && echo "ape mountpoint present (empty by design — aped mounts it)"; \
+	  test -d /workspace && test -d /cache && echo "workspace + cache mountpoints present"; \
+	  case ":$$PATH:" in *:/opt/ape/bin:*) echo "PATH leads with /opt/ape/bin" ;; \
+	    *) echo "FAIL: /opt/ape/bin missing from PATH" >&2; exit 1 ;; esac'
+
+# `ape` is no longer baked, so proving the image works means proving DELIVERY works:
+# mount an ape in the way aped does and check the guest resolves it by bare name. This is
+# a better test than the old `ape version` — that only proved a layer existed, while this
+# exercises the mechanism a real workspace depends on.
+.PHONY: smoke-delivery
+smoke-delivery: ## Verify a mounted ape resolves as `ape` inside the image (APE=/path/to/ape)
+	@test -n "$(APE)" || { echo "set APE=/path/to/ape (e.g. APE=$$(command -v ape))" >&2; exit 1; }
+	$(NERDCTL) $(NS_FLAG) run --rm \
+	  -v "$(abspath $(dir $(APE)))":/opt/ape/bin:ro \
+	  $(IMAGE) sh -lc 'set -e; command -v ape; ape version'
 
 .PHONY: login
 login: ## Log in to ghcr.io
