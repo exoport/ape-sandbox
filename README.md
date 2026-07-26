@@ -73,9 +73,37 @@ make publish                                # build + push to ghcr.io/exoport
 CI publishes on a `vX.Y.Z` tag push and build-checks every PR that touches the
 Dockerfile. No build secret is needed.
 
-> **Package visibility:** the first push creates the GHCR package **private**. Set
-> it to public on the package page — otherwise every consumer needs a pull
-> credential again, which is the whole thing this image exists to avoid.
+> **Package visibility:** the first push creates the GHCR package **private** —
+> `ghcr.io/exoport/ape-sandbox` has since been made public, but a fork or a renamed
+> package starts private again. Set it to public on the package page, or every
+> consumer needs a pull credential, which is the whole thing this image exists to
+> avoid. Check with:
+>
+> ```bash
+> tok=$(curl -s "https://ghcr.io/token?scope=repository%3Aexoport%2Fape-sandbox%3Apull&service=ghcr.io" | jq -r .token)
+> curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $tok" \
+>   https://ghcr.io/v2/exoport/ape-sandbox/manifests/v1.0.0   # 200 = public
+> ```
+
+## Platforms
+
+The published image is **`linux/amd64` only**: the workflow passes no `platforms:` to
+`build-push-action`, so it builds for the runner it lands on.
+
+The Dockerfile itself is already arch-parameterized — `ape`, Go and asdf are all
+fetched per `TARGETARCH` — so adding arm64 is a **workflow** change, not a Dockerfile
+one. Two ways, in increasing order of moving parts:
+
+- `platforms: linux/amd64,linux/arm64` plus `docker/setup-qemu-action`. One line, but
+  the arm64 half builds under emulation; the npm native modules and Playwright are
+  where that tends to get slow or fail.
+- A matrix over a native `ubuntu-24.04-arm` runner (free for public repos) that pushes
+  per-arch digests, then a merge job assembling one manifest index. Near-native build
+  times, at the cost of a two-job workflow.
+
+Either way it needs a **new image version** — a published tag is never re-pushed — and
+the consumer's digest pin (`sandbox.DefaultImage`) has to move with it. `aped` requires
+Linux + KVM + Kata, so this only matters once there is an arm64 host to run it on.
 
 ## Versioning
 
