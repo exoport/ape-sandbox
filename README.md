@@ -77,11 +77,26 @@ Dockerfile. No build secret is needed.
 > it to public on the package page — otherwise every consumer needs a pull
 > credential again, which is the whole thing this image exists to avoid.
 
-## Pinning policy
+## Versioning
 
-- The image tracks **ape releases**: tag it to match, then update
-  `sandbox.DefaultImage` (`internal/sandbox/kata.go`) and the `aped` policy image
-  allow-list in the `apex_process_ape` repo.
+The image has its **own version line**, independent of `ape`. It changes for reasons `ape`
+does not — a new base image, a newer asdf/bingo, a Playwright bump — and tying the tags
+together would mean either cutting a meaningless `ape` release to ship an image fix, or a
+tag that lies about what changed.
+
+Two ordinary dependency pins, one in each direction:
+
+| Pin | Where | Meaning |
+| --- | --- | --- |
+| `ARG APE_VERSION` | this repo's `Dockerfile` | which `ape` release is baked in |
+| `sandbox.DefaultImage` | `apex_process_ape`, `internal/sandbox/kata.go` (+ the `aped` policy image allow-list) | which image `ape` provisions |
+
+Bump each deliberately. The baked `ape` need **not** match the host's: the in-guest binary
+installs the framework and runs jobs, and the wire contracts it uses are additive-only.
+It does have a floor — `ape framework setup` needs the scoped `safe.directory` fix
+(**v0.0.49**) to read the read-only, host-owned framework mount.
+
+## Pinning policy
 - The base image is **digest-pinned** in the `Dockerfile`. Never publish an image
   built on a floating `:latest` base.
 - `USER` is **numeric** (`0`). `aped`'s containerd driver resolves the image user

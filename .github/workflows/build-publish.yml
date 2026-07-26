@@ -28,7 +28,7 @@ on:
         description: 'Image tag (default: git tag or "dev")'
         required: false
       ape_version:
-        description: 'ape release baked into the image'
+        description: 'ape release baked in (default: the ARG APE_VERSION in the Dockerfile)'
         required: false
 
 permissions:
@@ -37,7 +37,7 @@ permissions:
 
 env:
   IMAGE_REPO: ghcr.io/exoport/ape-sandbox
-  DEFAULT_APE_VERSION: v0.0.48
+  DEFAULT_APE_VERSION: v0.0.49
 
 jobs:
   build-publish:
@@ -52,8 +52,11 @@ jobs:
           if [ -z "$tag" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; fi
           [ -n "$tag" ] || tag="dev"
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+          # The baked ape is a DEPENDENCY PIN, not this image's version: an image tag
+          # must never be reused as an ape release name. Default to the pin in the
+          # Dockerfile so a plain tag push bakes what the repo says it bakes.
           ape="${{ inputs.ape_version }}"
-          if [ -z "$ape" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then ape="${GITHUB_REF_NAME}"; fi
+          [ -n "$ape" ] || ape="$(sed -n 's/^ARG APE_VERSION=//p' Dockerfile | head -1)"
           [ -n "$ape" ] || ape="${DEFAULT_APE_VERSION}"
           echo "ape_version=$ape" >> "$GITHUB_OUTPUT"
 

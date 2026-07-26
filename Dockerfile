@@ -19,10 +19,21 @@
 # `.bingo/` and `ape sandbox setup` materializes them into durable cache mounts,
 # which keeps this one image from fanning out into a matrix of per-stack variants.
 #
+# VERSIONING — the image has its OWN version line, independent of ape:
+#   * This image changes for reasons ape does not: a new base, a newer asdf/bingo, a
+#     Playwright bump, an extra build dep. Tying its tag to ape's would mean either
+#     cutting a meaningless ape release to ship an image fix, or a tag that lies about
+#     what changed.
+#   * The two directions are ordinary dependency pins, one each way: APE_VERSION below
+#     pins which ape release is baked in, and `sandbox.DefaultImage`
+#     (apex_process_ape, internal/sandbox/kata.go) + the aped policy image allow-list
+#     pin which image ape provisions. Bump each deliberately.
+#   * The baked ape need NOT match the host's ape: the in-guest binary installs the
+#     framework and runs jobs, and the wire contracts it uses are additive-only. It does
+#     have a floor, though — `ape framework setup` needs the scoped `safe.directory` fix
+#     (v0.0.49) to read the read-only, host-owned framework mount.
+#
 # PINNING POLICY — read before publishing (see README.md):
-#   * Tag to match the ape release, then update `sandbox.DefaultImage`
-#     (apex_process_ape, internal/sandbox/kata.go) + the aped policy image
-#     allow-list.
 #   * NEVER track a floating `:latest` base in a published image. BASE_IMAGE is
 #     digest-pinned below.
 #   * The base (agent-infra/sandbox) expects `seccomp=unconfined`. Acceptable
@@ -47,7 +58,7 @@ ARG BASE_IMAGE=ghcr.io/agent-infra/sandbox:1.11.0@sha256:6328d7fd2f0ff0b4c147c3d
 FROM ${BASE_IMAGE}
 
 # Pinned versions — bump deliberately, rebuild, then re-tag the image.
-ARG APE_VERSION=v0.0.48
+ARG APE_VERSION=v0.0.49
 ARG CLAUDE_CODE_VERSION=latest
 ARG PLAYWRIGHT_BROWSER=chromium
 ARG NODE_MAJOR=20

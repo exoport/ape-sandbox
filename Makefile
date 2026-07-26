@@ -14,8 +14,13 @@
 #   make publish
 
 IMAGE_REPO  ?= ghcr.io/exoport/ape-sandbox
-APE_VERSION ?= v0.0.48
-TAG         ?= $(APE_VERSION)
+# The image's OWN version, independent of ape (see the Dockerfile's VERSIONING note):
+# it changes for base/asdf/bingo/Playwright reasons that have nothing to do with ape.
+VERSION     ?= v1.0.0
+TAG         ?= $(VERSION)
+# Which ape release is baked in — a dependency pin, bumped deliberately. Floor: v0.0.49
+# (`ape framework setup` needs the scoped safe.directory fix for the read-only mount).
+APE_VERSION ?= v0.0.49
 IMAGE       := $(IMAGE_REPO):$(TAG)
 
 # Container CLI. Local builds on the aped host need the rootful daemon, so
@@ -32,7 +37,7 @@ help: ## Show targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 	@echo
-	@echo "  IMAGE=$(IMAGE)  (public, framework-free)"
+	@echo "  IMAGE=$(IMAGE)  (public, framework-free)  bakes ape $(APE_VERSION)"
 
 .PHONY: build
 build: ## Build the image. Set NAMESPACE=aped for local aped use.
