@@ -150,13 +150,21 @@ ENV PATH="/opt/ape/bin:${PATH}"
 # `asdf` in an ssh session use the ephemeral rootfs instead of the durable /cache mounts.
 RUN printf '%s\n' \
   '# ape-sandbox: login-shell environment (ssh / VS Code Remote).' \
-  '# sshd does not pass the container environment into a session, so re-establish it here.' \
-  'case ":$PATH:" in' \
-  '  *:/opt/ape/bin:*) ;;' \
-  '  *) PATH="/opt/ape/bin:$PATH"; export PATH ;;' \
-  'esac' \
-  '# Per-workspace values aped derives from the mounts it actually applied (tool caches,' \
-  '# egress proxy). Absent when the workspace declared no toolchain — not an error.' \
+  '#' \
+  '# sshd builds a FRESH environment per session rather than passing the container' \
+  '# environment along, so everything this image adds via ENV has to be re-established' \
+  '# here or it simply does not exist over ssh. Measured: without the go entry, `go` is' \
+  '# missing from every VS Code Remote / ssh shell even though the image ships it.' \
+  'for d in /opt/ape/bin /usr/local/go/bin; do' \
+  '  case ":$PATH:" in' \
+  '    *:"$d":*) ;;' \
+  '    *) PATH="$d:$PATH" ;;' \
+  '  esac' \
+  'done' \
+  'export PATH' \
+  '# Per-workspace values aped derives from the mounts it actually applied: the durable' \
+  '# tool caches (GOPATH/GOBIN/ASDF_DATA_DIR) and the egress proxy. Absent when the' \
+  '# workspace declared no toolchain and was granted no egress — not an error.' \
   'if [ -r "$HOME/.ape-env" ]; then . "$HOME/.ape-env"; fi' \
   > /etc/profile.d/ape-sandbox.sh \
   && chmod 0644 /etc/profile.d/ape-sandbox.sh

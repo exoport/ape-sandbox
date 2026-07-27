@@ -62,6 +62,20 @@ profile's `image:` override.
 | `/cache/<tool>` | durable tool caches (`asdf`, `go`, `cargo`, …) so a rebuild is offline |
 | `/opt/ape/bin` | the `ape` binary, read-only, from the node's own install — first on `PATH` |
 
+### Login shells (ssh / VS Code Remote)
+
+`sshd` builds a **fresh** environment per session instead of passing the container
+environment along, so anything set only via Dockerfile `ENV` does not exist over ssh.
+`/etc/profile.d/ape-sandbox.sh` re-establishes it: the `PATH` entries this image adds
+(`/opt/ape/bin`, `/usr/local/go/bin`) and then `$HOME/.ape-env`, the per-workspace file
+`aped` writes with the durable cache paths (`GOPATH`, `GOBIN`, `ASDF_DATA_DIR`) and the
+egress proxy.
+
+Measured, not assumed: before this, `go` was missing from every ssh / VS Code Remote
+shell even though the image ships it, and `GOPATH` pointed at the ephemeral rootfs
+rather than the durable cache — so an ssh session silently defeated the offline-after-
+warmup property.
+
 Inside a workspace, install the framework's skills + pipelines from the mount
 without touching the network:
 
